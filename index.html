@@ -14,6 +14,7 @@
             --bg-panel: #FFFFFF;
             --border-color: #E2E2E2;
             --success-green: #00885A;
+            --warning-yellow: #B25E00;
         }
 
         body {
@@ -50,6 +51,16 @@
             border-left: 4px solid var(--coursera-blue);
             margin-bottom: 30px;
         }
+        
+        .important-note {
+            background-color: #FFF8E1;
+            border-left: 4px solid var(--warning-yellow);
+            padding: 12px 16px;
+            font-size: 14px;
+            color: #794000;
+            margin-bottom: 15px;
+            border-radius: 0 4px 4px 0;
+        }
 
         canvas {
             background-color: var(--text-main);
@@ -79,7 +90,7 @@
             padding: 20px;
             font-size: 20px;
             background-color: #000;
-            margin-bottom: 20px;
+            margin-bottom: 5px;
         }
         #btn-play:active { background-color: #333; }
 
@@ -133,12 +144,12 @@
         <h1 id="tutorial-title">ADSR Envelope Simulator</h1>
         <div class="tutorial-content">
             <p><strong>Objective:</strong> Experiment visually and audibly with the four stages of the ADSR envelope (Attack, Decay, Sustain, Release) to sculpt a synthesizer's volume over time.</p>
-            <p><strong>Instructions:</strong></p>
+            <p><strong>Instructions & Accessibility:</strong></p>
             <ol>
                 <li>Click <strong>Start Simulator</strong> to begin.</li>
-                <li>Press and hold the <strong>Hold Note</strong> button to trigger the sound, and release it to stop.</li>
+                <li>Press and hold the <strong>Hold Note</strong> button (or hold the <kbd>Spacebar</kbd>) to trigger the sound, and release it to stop.</li>
+                <li><strong>Crucial:</strong> Adjust the sliders <em>before</em> holding the note. Changing parameters while holding the button may cause audio calculation delays.</li>
                 <li>Complete the <strong>5 sequential missions</strong> to learn how to sculpt percussive and sustained profiles.</li>
-                <li>The canvas will draw your envelope shape dynamically.</li>
             </ol>
         </div>
         <button id="btn-start" tabindex="0">Start Simulator</button>
@@ -151,7 +162,10 @@
         
         <canvas id="env-canvas" width="800" height="200" aria-label="ADSR Envelope visualizer" role="img"></canvas>
         
-        <button id="btn-play" aria-pressed="false" tabindex="0">PRESS AND HOLD NOTE</button>
+        <button id="btn-play" aria-pressed="false" tabindex="0">PRESS AND HOLD NOTE (Spacebar)</button>
+        <div class="important-note">
+            <strong>Note:</strong> Set your ADSR parameters first, then trigger the note.
+        </div>
 
         <div class="adsr-controls">
             <!-- Attack -->
@@ -212,7 +226,7 @@
         const mTitle = document.getElementById('mission-title');
         const mStatus = document.getElementById('mission-status');
 
-        let audioCtx, osc, gainNode;
+        let audioCtx, osc, gainNode, safetyLimiter;
         let isPressed = false;
         let currentMission = 1;
 
@@ -227,16 +241,25 @@
         function initAudio() {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                safetyLimiter = audioCtx.createDynamicsCompressor();
+                safetyLimiter.threshold.value = -3;
+                safetyLimiter.knee.value = 0;
+                safetyLimiter.ratio.value = 20;
+                safetyLimiter.attack.value = 0.001;
+                safetyLimiter.release.value = 0.1;
+
                 osc = audioCtx.createOscillator();
                 gainNode = audioCtx.createGain();
                 
-                osc.type = 'sawtooth'; // Rich waveform to hear filter/volume clearly
-                osc.frequency.value = 110; // A2
+                osc.type = 'sawtooth'; 
+                osc.frequency.value = 110; 
                 
                 gainNode.gain.value = 0;
                 
                 osc.connect(gainNode);
-                gainNode.connect(audioCtx.destination);
+                gainNode.connect(safetyLimiter);
+                safetyLimiter.connect(audioCtx.destination);
                 osc.start();
             }
         }
@@ -244,6 +267,8 @@
         function triggerAttack() {
             if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
             initAudio();
+            
+            if (isPressed) return;
             isPressed = true;
             btnPlay.setAttribute('aria-pressed', 'true');
             btnPlay.style.backgroundColor = '#0056D2';
@@ -265,7 +290,7 @@
         }
 
         function triggerRelease() {
-            if (!audioCtx) return;
+            if (!audioCtx || !isPressed) return;
             isPressed = false;
             btnPlay.setAttribute('aria-pressed', 'false');
             btnPlay.style.backgroundColor = '#000';
@@ -288,7 +313,7 @@
             const s = parseFloat(inpS.value) / 100;
             const r = parseFloat(inpR.value);
 
-            const totalTime = 6; // Fixed X axis scale
+            const totalTime = 6; 
             const timeToX = (t) => (t / totalTime) * (canvas.width - 100) + 20;
             const valToY = (v) => canvas.height - 20 - (v * (canvas.height - 40));
 
@@ -296,21 +321,15 @@
             ctx.strokeStyle = '#82B1FF';
             ctx.lineWidth = 4;
             
-            // Start
             ctx.moveTo(timeToX(0), valToY(0));
-            // Attack
             ctx.lineTo(timeToX(a), valToY(1));
-            // Decay to Sustain
             ctx.lineTo(timeToX(a + d), valToY(s));
-            // Hold Sustain visually for 1.5 seconds
+            
             const holdEnd = a + d + 1.5;
             ctx.lineTo(timeToX(holdEnd), valToY(s));
-            // Release
             ctx.lineTo(timeToX(holdEnd + r), valToY(0));
-
             ctx.stroke();
 
-            // Labels
             ctx.fillStyle = '#E2E2E2';
             ctx.font = '14px Arial';
             ctx.fillText('A', timeToX(a/2), valToY(0.5));
@@ -325,7 +344,7 @@
             valS.textContent = inpS.value;
             valR.textContent = inpR.value;
             drawEnvelope();
-            checkMissions();
+            // Evitar reevaluar el motor de audio masivamente mientras se desliza
         }
 
         function checkMissions() {
@@ -366,21 +385,38 @@
             }
         }
 
-        // Listeners for mouse/touch interactions
+        // Global Keyboard Handler (WCAG compliance)
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' || e.key === ' ') {
+                e.preventDefault();
+                if (appScreen.style.display === 'block' && !e.repeat && !isPressed) {
+                    triggerAttack();
+                }
+            } else if (e.key === 'Enter') {
+                if (appScreen.style.display === 'block' && e.target !== btnStart && !e.repeat) {
+                    if (e.target.tagName !== 'BUTTON') {
+                        e.preventDefault();
+                        if (!isPressed) triggerAttack();
+                    }
+                }
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'Space' || e.key === ' ' || e.key === 'Enter') {
+                e.preventDefault();
+                if (isPressed) triggerRelease();
+                checkMissions();
+            }
+        });
+
+        // Mouse / Touch handlers
         btnPlay.addEventListener('mousedown', triggerAttack);
-        btnPlay.addEventListener('mouseup', triggerRelease);
-        btnPlay.addEventListener('mouseleave', () => { if(isPressed) triggerRelease(); });
+        btnPlay.addEventListener('mouseup', () => { triggerRelease(); checkMissions(); });
+        btnPlay.addEventListener('mouseleave', () => { if(isPressed) { triggerRelease(); checkMissions(); } });
         
         btnPlay.addEventListener('touchstart', (e) => { e.preventDefault(); triggerAttack(); });
-        btnPlay.addEventListener('touchend', (e) => { e.preventDefault(); triggerRelease(); });
-        
-        // Keyboard accessibility
-        btnPlay.addEventListener('keydown', (e) => {
-            if ((e.key === 'Enter' || e.key === ' ') && !isPressed) triggerAttack();
-        });
-        btnPlay.addEventListener('keyup', (e) => {
-            if ((e.key === 'Enter' || e.key === ' ') && isPressed) triggerRelease();
-        });
+        btnPlay.addEventListener('touchend', (e) => { e.preventDefault(); triggerRelease(); checkMissions(); });
 
         inpA.addEventListener('input', updateValues);
         inpD.addEventListener('input', updateValues);
